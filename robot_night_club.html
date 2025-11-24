@@ -220,11 +220,14 @@
     // --- Configuration ---
     const CONFIG = {
         voxelSize: 0.15,
-        accel: 110.0,       
-        friction: 5.0,     
+        accel: 110.0,
+        friction: 5.0,
         bloomStrength: 1.5,
         bloomRadius: 0.6,
-        bloomThreshold: 0.15
+        bloomThreshold: 0.15,
+        gridBoundary: 140,       // Grid boundary limit
+        gridWarningZone: 120,     // Start warning at this distance
+        gridPushBackForce: 0.95   // Gentle push back multiplier
     };
 
     let camera, scene, renderer, composer;
@@ -247,6 +250,11 @@
     let cameraZoom = 40;
     let targetCameraZoom = 40;
     let score = 0;
+
+    // Grid Boundary System
+    let boundaryWarningTimer = 0;
+    let isOutsideGrid = false;
+    let lastBoundaryWarning = 0;
     
     // --- MCP DATA STREAMS ---
     const MCP_PHRASES = [
@@ -1125,6 +1133,68 @@
         setTimeout(() => board.style.color = '#fff', 300);
     }
 
+    function checkGridBoundaries(delta) {
+        if (!playerRobot) return;
+
+        const pos = playerRobot.mesh.position;
+        const distFromCenter = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
+
+        // Check if outside warning zone
+        if (distFromCenter > CONFIG.gridWarningZone) {
+            boundaryWarningTimer += delta;
+
+            // Visual warning effect
+            if (!isOutsideGrid && distFromCenter > CONFIG.gridWarningZone) {
+                isOutsideGrid = true;
+                playerRobot.setExpression('HURT');
+            }
+
+            // Voice warning every 3 seconds
+            const currentTime = clock.elapsedTime;
+            if (currentTime - lastBoundaryWarning > 3.0) {
+                lastBoundaryWarning = currentTime;
+                const warnings = [
+                    "Return to the grid",
+                    "Warning: Grid boundary",
+                    "Turn back",
+                    "Stay in the play area",
+                    "You're leaving the grid"
+                ];
+                const warning = warnings[Math.floor(Math.random() * warnings.length)];
+                audioSystem.speak(warning, 1.0, false);
+                audioSystem.playTone(200, 'sawtooth', 0.3, 0.3);
+            }
+
+            // Hard boundary - prevent going too far
+            if (distFromCenter > CONFIG.gridBoundary) {
+                // Push player back gently towards center
+                const pushBackStrength = 0.3;
+                const dirToCenter = new THREE.Vector3(-pos.x, 0, -pos.z).normalize();
+                playerRobot.velocity.add(dirToCenter.multiplyScalar(pushBackStrength));
+
+                // Reduce velocity when hitting boundary
+                playerRobot.velocity.multiplyScalar(CONFIG.gridPushBackForce);
+
+                // Position constraint
+                const angle = Math.atan2(pos.z, pos.x);
+                pos.x = Math.cos(angle) * CONFIG.gridBoundary;
+                pos.z = Math.sin(angle) * CONFIG.gridBoundary;
+
+                // Flash effect
+                playerRobot.setExpression('HURT');
+                audioSystem.playTone(150, 'square', 0.1, 0.2);
+            }
+        } else {
+            // Back inside safe zone
+            if (isOutsideGrid) {
+                isOutsideGrid = false;
+                audioSystem.speak("Grid area", 1.2, false);
+                audioSystem.playTone(600, 'sine', 0.1, 0.1);
+            }
+            boundaryWarningTimer = 0;
+        }
+    }
+
     function animate() {
         requestAnimationFrame(animate);
         const delta = clock.getDelta();
@@ -1133,7 +1203,10 @@
 
         if (playerRobot) {
             playerRobot.update(delta, input, cameraAngle);
-            
+
+            // Check grid boundaries and guide player
+            checkGridBoundaries(delta);
+
             if (playerRobot.mesh.position.y < -30) {
                 resetPlayer();
             }
@@ -1191,24 +1264,33 @@
         document.getElementById('overlay').style.opacity = 0;
         setTimeout(() => document.getElementById('overlay').style.display = 'none', 800);
 
-        // Warm up speech synthesis for mobile (requires user interaction)
+        // Critical: Warm up speech synthesis for mobile (requires user interaction)
         if (window.speechSynthesis) {
-            // Create a silent utterance to initialize speech on mobile
-            const warmup = new SpeechSynthesisUtterance('');
-            warmup.volume = 0;
-            window.speechSynthesis.speak(warmup);
+            // iOS/Safari requires an actual utterance with sound during user interaction
+            const warmup = new SpeechSynthesisUtterance('Starting');
+            warmup.volume = 0.3;
+            warmup.rate = 2.0; // Fast so it doesn't interfere
 
-            // Load voices again to ensure they're available
+            // Try to get voices synchronously
             const voices = window.speechSynthesis.getVoices();
-            if (voices.length === 0) {
-                // Force voice loading on mobile
-                window.speechSynthesis.getVoices();
+            if (voices.length > 0) {
+                const englishVoice = voices.find(v => v.lang === 'en-US' || v.lang === 'en-GB');
+                if (englishVoice) warmup.voice = englishVoice;
             }
+
+            window.speechSynthesis.speak(warmup);
         }
 
         init();
         isPlaying = true;
         audioSystem.init();
+
+        // Test voice after initialization
+        setTimeout(() => {
+            if (audioSystem && audioSystem.speak) {
+                audioSystem.speak('System initialized', 1.0, false);
+            }
+        }, 1500);
     });
     
     document.getElementById('switch-char-btn').addEventListener('click', switchCharacter);
