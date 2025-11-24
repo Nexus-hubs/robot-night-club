@@ -242,23 +242,25 @@
 
     const audioSystem = {
         nextNoteTime: 0,
-        tempo: 100, 
+        tempo: 100,
         scheduleAheadTime: 0.1,
-        
+        voicesLoaded: false,
+        selectedVoice: null,
+
         init: function() {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             audioCtx = new AudioContext();
-            
+
             masterGain = audioCtx.createGain();
-            masterGain.gain.value = 0.5; 
-            
+            masterGain.gain.value = 0.5;
+
             delayNode = audioCtx.createDelay();
-            delayNode.delayTime.value = 0.375; 
+            delayNode.delayTime.value = 0.375;
             const delayFeedback = audioCtx.createGain();
             delayFeedback.gain.value = 0.4;
-            
+
             const delayFilter = audioCtx.createBiquadFilter();
-            delayFilter.frequency.value = 1000; 
+            delayFilter.frequency.value = 1000;
 
             delayNode.connect(delayFeedback);
             delayFeedback.connect(delayFilter);
@@ -268,21 +270,90 @@
 
             this.nextNoteTime = audioCtx.currentTime;
             this.scheduler();
+
+            // Initialize speech synthesis voices
+            this.loadVoices();
+        },
+
+        loadVoices: function() {
+            const setVoice = () => {
+                const voices = window.speechSynthesis.getVoices();
+                if (voices.length > 0) {
+                    // Filter for high-quality English voices
+                    const englishVoices = voices.filter(v =>
+                        v.lang.startsWith('en-') &&
+                        !v.lang.includes('IN') && // Exclude Indian English
+                        !v.lang.includes('da-') && // Exclude Danish
+                        (v.name.includes('Google') || v.name.includes('Microsoft') ||
+                         v.name.includes('Natural') || v.name.includes('Premium') ||
+                         v.name.includes('Enhanced') || !v.localService)
+                    );
+
+                    // Prioritize specific high-quality voices
+                    this.selectedVoice = englishVoices.find(v =>
+                        v.name.includes('Google US English') ||
+                        v.name.includes('Google UK English') ||
+                        v.name.includes('Microsoft David') ||
+                        v.name.includes('Microsoft Zira') ||
+                        (v.lang === 'en-US' || v.lang === 'en-GB')
+                    ) || englishVoices[0] || voices.find(v => v.lang.startsWith('en-'));
+
+                    this.voicesLoaded = true;
+                    console.log('Voice selected:', this.selectedVoice?.name, this.selectedVoice?.lang);
+                }
+            };
+
+            // Try to load voices immediately
+            setVoice();
+
+            // Also listen for voices changed event (Chrome requires this)
+            if (window.speechSynthesis.onvoiceschanged !== undefined) {
+                window.speechSynthesis.onvoiceschanged = setVoice;
+            }
         },
 
         speak: function(text, pitch = 1.0, isMCP = false) {
             if (!window.speechSynthesis) return;
             window.speechSynthesis.cancel();
+
             const u = new SpeechSynthesisUtterance(text);
+
+            // Use pre-selected voice or fallback to finding one
+            if (this.selectedVoice) {
+                u.voice = this.selectedVoice;
+                u.lang = this.selectedVoice.lang;
+            } else {
+                // Fallback: try to find a voice now
+                const voices = window.speechSynthesis.getVoices();
+                const englishVoice = voices.find(v =>
+                    (v.lang === 'en-US' || v.lang === 'en-GB') &&
+                    !v.name.includes('da-')
+                ) || voices.find(v => v.lang.startsWith('en-'));
+
+                if (englishVoice) {
+                    u.voice = englishVoice;
+                    u.lang = englishVoice.lang;
+                } else {
+                    u.lang = 'en-US';
+                }
+            }
+
             if (isMCP) {
-                u.rate = 0.7; u.pitch = 0.1; u.volume = 1.0;
+                // MCP voice: Deep, authoritative, but still natural and clear
+                u.rate = 0.85;
+                u.pitch = 0.75;
+                u.volume = 1.0;
                 const sub = document.getElementById('mcp-subtitles');
                 sub.innerText = text; sub.style.opacity = 1;
                 sub.style.textShadow = `2px 0 0 #ff0044, -2px 0 0 #00ffff`;
                 setTimeout(() => { sub.style.opacity = 0; }, 3500);
             } else {
-                u.rate = 1.2; u.pitch = pitch; u.volume = 0.5;
+                // Regular voice: Natural, clear, and human-like
+                u.rate = 1.0;
+                u.pitch = pitch;
+                u.volume = 0.7;
             }
+
             window.speechSynthesis.speak(u);
         },
 
