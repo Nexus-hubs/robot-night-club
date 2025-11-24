@@ -103,33 +103,66 @@
         }
 
         #joystick-zone {
-            position: absolute; bottom: 60px; left: 60px;
-            width: 160px; height: 160px;
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            position: absolute; bottom: 40px; left: 40px;
+            width: 180px; height: 180px;
+            background: rgba(0, 255, 255, 0.08);
+            border: 2px solid rgba(0, 255, 255, 0.4);
             border-radius: 50%;
             display: none; touch-action: none;
-            backdrop-filter: blur(2px);
-            opacity: 0; transition: opacity 1s;
+            backdrop-filter: blur(5px);
+            opacity: 1;
             z-index: 100;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.3), inset 0 0 20px rgba(0, 255, 255, 0.1);
         }
         #joystick-knob {
             position: absolute; top: 50%; left: 50%;
-            width: 60px; height: 60px;
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.5);
+            width: 70px; height: 70px;
+            background: rgba(0, 255, 255, 0.3);
+            border: 2px solid rgba(0, 255, 255, 0.8);
             border-radius: 50%;
             transform: translate(-50%, -50%);
             pointer-events: none;
-            box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 25px rgba(0, 255, 255, 0.5), inset 0 0 15px rgba(0, 255, 255, 0.2);
+            transition: all 0.1s ease;
+        }
+
+        #mobile-zoom-controls {
+            position: absolute; bottom: 40px; right: 40px;
+            display: none; flex-direction: column; gap: 10px;
+            z-index: 100;
+        }
+        .zoom-btn {
+            width: 60px; height: 60px;
+            background: rgba(0, 255, 255, 0.15);
+            border: 2px solid rgba(0, 255, 255, 0.5);
+            border-radius: 50%;
+            color: #00ffff;
+            font-size: 28px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .zoom-btn:active {
+            background: rgba(0, 255, 255, 0.3);
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.6);
+            transform: scale(0.95);
         }
 
         @media (max-width: 768px) {
             #joystick-zone { display: block; }
+            #mobile-zoom-controls { display: flex; }
             #score-board { top: 20px; right: 20px; transform: scale(0.7); transform-origin: top right; }
             h1 { font-size: 2rem; letter-spacing: 5px; }
-            #controls-box { bottom: 80px; right: 20px; }
+            #controls-box { bottom: 250px; right: 20px; transform: scale(0.85); transform-origin: bottom right; }
+            .hud-btn { width: 120px; font-size: 12px; padding: 8px 12px; }
             #mcp-subtitles { font-size: 1.2rem; top: 20%; }
+            #ui-layer { left: 20px; top: 20px; font-size: 10px; }
         }
     </style>
 </head>
@@ -162,6 +195,11 @@
 
 <div id="joystick-zone">
     <div id="joystick-knob"></div>
+</div>
+
+<div id="mobile-zoom-controls">
+    <button class="zoom-btn" id="zoom-in-btn">+</button>
+    <button class="zoom-btn" id="zoom-out-btn">−</button>
 </div>
 
 <script type="importmap">
@@ -513,8 +551,9 @@
         document.addEventListener('touchend', onTouchEnd);
         
         window.addEventListener('wheel', onMouseWheel, { passive: false });
-        
+
         setupJoystick();
+        setupMobileZoom();
         window.addEventListener('resize', onWindowResize);
         animate();
     }
@@ -837,15 +876,71 @@
 
     // --- CONTROLS ---
     function setupJoystick() {
-        const zone = document.getElementById('joystick-zone'); const knob = document.getElementById('joystick-knob'); let rect;
-        zone.addEventListener('touchstart', (e) => { e.preventDefault(); rect = zone.getBoundingClientRect(); updateStick(e.touches[0]); });
-        zone.addEventListener('touchmove', (e) => { e.preventDefault(); updateStick(e.touches[0]); });
-        zone.addEventListener('touchend', (e) => { e.preventDefault(); knob.style.transform = `translate(-50%, -50%)`; input.x = 0; input.y = 0; });
+        const zone = document.getElementById('joystick-zone');
+        const knob = document.getElementById('joystick-knob');
+        let rect;
+
+        zone.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            rect = zone.getBoundingClientRect();
+            updateStick(e.touches[0]);
+            knob.style.background = 'rgba(0, 255, 255, 0.5)';
+            knob.style.borderColor = 'rgba(0, 255, 255, 1)';
+        });
+
+        zone.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            updateStick(e.touches[0]);
+        });
+
+        zone.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            knob.style.transform = `translate(-50%, -50%)`;
+            knob.style.background = 'rgba(0, 255, 255, 0.3)';
+            knob.style.borderColor = 'rgba(0, 255, 255, 0.8)';
+            input.x = 0;
+            input.y = 0;
+        });
+
         function updateStick(touch) {
-            const maxDist = 60; let dx = touch.clientX - (rect.left + rect.width/2); let dy = touch.clientY - (rect.top + rect.height/2);
-            const dist = Math.min(Math.sqrt(dx*dx + dy*dy), maxDist); const angle = Math.atan2(dy, dx);
+            const maxDist = 70; // Increased for larger joystick
+            let dx = touch.clientX - (rect.left + rect.width/2);
+            let dy = touch.clientY - (rect.top + rect.height/2);
+            const dist = Math.min(Math.sqrt(dx*dx + dy*dy), maxDist);
+            const angle = Math.atan2(dy, dx);
             knob.style.transform = `translate(calc(-50% + ${Math.cos(angle)*dist}px), calc(-50% + ${Math.sin(angle)*dist}px))`;
-            input.x = (Math.cos(angle)*dist)/maxDist; input.y = (Math.sin(angle)*dist)/maxDist;
+            input.x = (Math.cos(angle)*dist)/maxDist;
+            input.y = (Math.sin(angle)*dist)/maxDist;
+        }
+    }
+
+    function setupMobileZoom() {
+        const zoomInBtn = document.getElementById('zoom-in-btn');
+        const zoomOutBtn = document.getElementById('zoom-out-btn');
+
+        if (zoomInBtn && zoomOutBtn) {
+            zoomInBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                targetCameraZoom = Math.max(10, targetCameraZoom - 5);
+                audioSystem.playTone(800, 'sine', 0.05, 0.1);
+            });
+
+            zoomOutBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                targetCameraZoom = Math.min(120, targetCameraZoom + 5);
+                audioSystem.playTone(600, 'sine', 0.05, 0.1);
+            });
+
+            // Also support click for desktop testing
+            zoomInBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                targetCameraZoom = Math.max(10, targetCameraZoom - 5);
+            });
+
+            zoomOutBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                targetCameraZoom = Math.min(120, targetCameraZoom + 5);
+            });
         }
     }
 
@@ -872,26 +967,71 @@
     
     let prevTouchX = 0;
     let prevTouchY = 0;
-    function onTouchStart(e) { 
-        if (e.target.id === 'joystick-zone') return;
-        isDragging = true; 
-        prevTouchX = e.touches[0].clientX; 
-        prevTouchY = e.touches[0].clientY;
+    let prevPinchDist = 0;
+    let isPinching = false;
+
+    function onTouchStart(e) {
+        if (e.target.id === 'joystick-zone' || e.target.classList.contains('zoom-btn')) return;
+
+        if (e.touches.length === 2) {
+            // Two fingers - start pinch zoom
+            isPinching = true;
+            isDragging = false;
+            const touch1 = e.touches[0];
+            const touch2 = e.touches[1];
+            prevPinchDist = Math.hypot(
+                touch2.clientX - touch1.clientX,
+                touch2.clientY - touch1.clientY
+            );
+        } else if (e.touches.length === 1) {
+            // One finger - camera rotation
+            isDragging = true;
+            isPinching = false;
+            prevTouchX = e.touches[0].clientX;
+            prevTouchY = e.touches[0].clientY;
+        }
     }
-    function onTouchMove(e) { 
-        if(isDragging && e.touches.length === 1 && e.target.id !== 'joystick-zone') {
+
+    function onTouchMove(e) {
+        if (e.target.id === 'joystick-zone' || e.target.classList.contains('zoom-btn')) return;
+
+        if (e.touches.length === 2 && isPinching) {
+            // Pinch zoom with two fingers
+            e.preventDefault();
+            const touch1 = e.touches[0];
+            const touch2 = e.touches[1];
+            const currentPinchDist = Math.hypot(
+                touch2.clientX - touch1.clientX,
+                touch2.clientY - touch1.clientY
+            );
+
+            const pinchDelta = prevPinchDist - currentPinchDist;
+            targetCameraZoom += pinchDelta * 0.15;
+            targetCameraZoom = Math.max(10, Math.min(targetCameraZoom, 120));
+
+            prevPinchDist = currentPinchDist;
+        } else if (e.touches.length === 1 && isDragging && !isPinching) {
+            // Camera rotation with one finger
             const deltaX = e.touches[0].clientX - prevTouchX;
             const deltaY = e.touches[0].clientY - prevTouchY;
-            
+
             cameraAngle -= deltaX * 0.008;
-            cameraHeightFactor += deltaY * 0.008; 
+            cameraHeightFactor += deltaY * 0.008;
             cameraHeightFactor = Math.max(0.3, Math.min(cameraHeightFactor, 2.5));
 
             prevTouchX = e.touches[0].clientX;
             prevTouchY = e.touches[0].clientY;
         }
     }
-    function onTouchEnd() { isDragging = false; }
+
+    function onTouchEnd(e) {
+        if (e.touches.length < 2) {
+            isPinching = false;
+        }
+        if (e.touches.length === 0) {
+            isDragging = false;
+        }
+    }
 
     function onMouseWheel(event) {
         event.preventDefault();
