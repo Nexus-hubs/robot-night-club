@@ -190,6 +190,7 @@
 <div id="controls-box">
     <button class="hud-btn" id="switch-char-btn">Switch Unit</button>
     <button class="hud-btn" id="reset-pos-btn">Reset Pos</button>
+    <button class="hud-btn" id="toggle-music-btn">Music: ON</button>
     <div class="hud-hint">Drag: Rotate/Tilt Camera</div>
 </div>
 
@@ -292,6 +293,7 @@
         scheduleAheadTime: 0.1,
         voicesLoaded: false,
         selectedVoice: null,
+        musicEnabled: true,  // Music toggle state
 
         init: function() {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -525,6 +527,9 @@
         },
 
         scheduleNote: function(time) {
+            // Only play music if enabled, sound effects always play
+            if (!this.musicEnabled) return;
+
             const step = noteIndex % 16;
             const isBuild = measure >= 4;
             const isFull = measure >= 8;
@@ -541,8 +546,13 @@
             if (step % 8 === 4 && isFull) this.playNoise('clap', 0.2, 0.3);
             if (step % 3 === 0 && Math.random() > 0.7) {
                 const note = LEAD_SCALE[Math.floor(Math.random() * LEAD_SCALE.length)];
-                this.playTone(note, 'triangle', 0.4, 0.1); 
+                this.playTone(note, 'triangle', 0.4, 0.1);
             }
+        },
+
+        toggleMusic: function() {
+            this.musicEnabled = !this.musicEnabled;
+            return this.musicEnabled;
         }
     };
 
@@ -1295,6 +1305,19 @@
     
     document.getElementById('switch-char-btn').addEventListener('click', switchCharacter);
     document.getElementById('reset-pos-btn').addEventListener('click', resetPlayer);
+    document.getElementById('toggle-music-btn').addEventListener('click', () => {
+        const btn = document.getElementById('toggle-music-btn');
+        const isEnabled = audioSystem.toggleMusic();
+        btn.innerText = isEnabled ? 'Music: ON' : 'Music: OFF';
+        btn.style.color = isEnabled ? '#fff' : '#ff0044';
+        btn.style.borderColor = isEnabled ? 'rgba(0, 255, 255, 0.3)' : 'rgba(255, 0, 68, 0.5)';
+
+        // Play confirmation sound
+        audioSystem.playTone(isEnabled ? 600 : 300, 'sine', 0.1, 0.2);
+
+        // Voice feedback
+        audioSystem.speak(isEnabled ? 'Music on' : 'Music off', 1.0, false);
+    });
 
 </script>
 </body>
