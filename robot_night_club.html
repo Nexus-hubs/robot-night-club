@@ -190,6 +190,7 @@
 <div id="controls-box">
     <button class="hud-btn" id="switch-char-btn">Switch Unit</button>
     <button class="hud-btn" id="reset-pos-btn">Reset Pos</button>
+    <button class="hud-btn" id="toggle-music-btn">Music: ON</button>
     <div class="hud-hint">Drag: Rotate/Tilt Camera</div>
 </div>
 
@@ -220,11 +221,14 @@
     // --- Configuration ---
     const CONFIG = {
         voxelSize: 0.15,
-        accel: 110.0,       
-        friction: 5.0,     
+        accel: 110.0,
+        friction: 5.0,
         bloomStrength: 1.5,
         bloomRadius: 0.6,
-        bloomThreshold: 0.15
+        bloomThreshold: 0.15,
+        gridBoundary: 140,       // Grid boundary limit
+        gridWarningZone: 120,     // Start warning at this distance
+        gridPushBackForce: 0.95   // Gentle push back multiplier
     };
 
     let camera, scene, renderer, composer;
@@ -247,6 +251,11 @@
     let cameraZoom = 40;
     let targetCameraZoom = 40;
     let score = 0;
+
+    // Grid Boundary System
+    let boundaryWarningTimer = 0;
+    let isOutsideGrid = false;
+    let lastBoundaryWarning = 0;
     
     // --- MCP DATA STREAMS ---
     const MCP_PHRASES = [
@@ -284,6 +293,7 @@
         scheduleAheadTime: 0.1,
         voicesLoaded: false,
         selectedVoice: null,
+        musicEnabled: true,  // Music toggle state
 
         init: function() {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -317,24 +327,34 @@
             const setVoice = () => {
                 const voices = window.speechSynthesis.getVoices();
                 if (voices.length > 0) {
-                    // Filter for high-quality English voices
-                    const englishVoices = voices.filter(v =>
+                    // Filter for English voices (less restrictive for mobile)
+                    let englishVoices = voices.filter(v =>
                         v.lang.startsWith('en-') &&
-                        !v.lang.includes('IN') && // Exclude Indian English
-                        !v.lang.includes('da-') && // Exclude Danish
-                        (v.name.includes('Google') || v.name.includes('Microsoft') ||
-                         v.name.includes('Natural') || v.name.includes('Premium') ||
-                         v.name.includes('Enhanced') || !v.localService)
+                        !v.lang.includes('da-') // Exclude Danish
                     );
 
-                    // Prioritize specific high-quality voices
-                    this.selectedVoice = englishVoices.find(v =>
-                        v.name.includes('Google US English') ||
-                        v.name.includes('Google UK English') ||
-                        v.name.includes('Microsoft David') ||
-                        v.name.includes('Microsoft Zira') ||
-                        (v.lang === 'en-US' || v.lang === 'en-GB')
-                    ) || englishVoices[0] || voices.find(v => v.lang.startsWith('en-'));
+                    // If no English voices found, just use any available voice
+                    if (englishVoices.length === 0) {
+                        englishVoices = voices;
+                    }
+
+                    // Prioritize voices in order of preference
+                    this.selectedVoice =
+                        // First: Try high-quality cloud voices
+                        englishVoices.find(v =>
+                            v.name.includes('Google US English') ||
+                            v.name.includes('Google UK English') ||
+                            v.name.includes('Microsoft David') ||
+                            v.name.includes('Microsoft Zira') ||
+                            v.name.includes('Samantha') || // iOS default
+                            v.name.includes('Daniel') // iOS UK
+                        ) ||
+                        // Second: Try any US or UK English voice
+                        englishVoices.find(v => v.lang === 'en-US' || v.lang === 'en-GB') ||
+                        // Third: Try any English voice
+                        englishVoices.find(v => v.lang.startsWith('en-')) ||
+                        // Last resort: Use first available voice
+                        englishVoices[0] || voices[0];
 
                     this.voicesLoaded = true;
                     console.log('Voice selected:', this.selectedVoice?.name, this.selectedVoice?.lang);
@@ -344,36 +364,52 @@
             // Try to load voices immediately
             setVoice();
 
-            // Also listen for voices changed event (Chrome requires this)
+            // Also listen for voices changed event (Chrome/Safari requires this)
             if (window.speechSynthesis.onvoiceschanged !== undefined) {
                 window.speechSynthesis.onvoiceschanged = setVoice;
             }
+
+            // For mobile: Try again after a delay
+            setTimeout(setVoice, 100);
+            setTimeout(setVoice, 500);
         },
 
         speak: function(text, pitch = 1.0, isMCP = false) {
             if (!window.speechSynthesis) return;
+
+            // Cancel any ongoing speech
             window.speechSynthesis.cancel();
 
             const u = new SpeechSynthesisUtterance(text);
 
-            // Use pre-selected voice or fallback to finding one
-            if (this.selectedVoice) {
-                u.voice = this.selectedVoice;
-                u.lang = this.selectedVoice.lang;
-            } else {
-                // Fallback: try to find a voice now
-                const voices = window.speechSynthesis.getVoices();
-                const englishVoice = voices.find(v =>
-                    (v.lang === 'en-US' || v.lang === 'en-GB') &&
-                    !v.name.includes('da-')
-                ) || voices.find(v => v.lang.startsWith('en-'));
+            // Mobile fix: Always get fresh voice list
+            const voices = window.speechSynthesis.getVoices();
 
-                if (englishVoice) {
-                    u.voice = englishVoice;
-                    u.lang = englishVoice.lang;
-                } else {
-                    u.lang = 'en-US';
+            // Try to use pre-selected voice
+            let voiceToUse = this.selectedVoice;
+
+            // If no voice selected or voices not loaded, try to find one now
+            if (!voiceToUse || voices.length === 0) {
+                // Get voices again (mobile browsers sometimes need this)
+                const freshVoices = window.speechSynthesis.getVoices();
+
+                if (freshVoices.length > 0) {
+                    // Find the best English voice
+                    voiceToUse = freshVoices.find(v =>
+                        v.lang === 'en-US' || v.lang === 'en-GB'
+                    ) || freshVoices.find(v =>
+                        v.lang.startsWith('en-') && !v.lang.includes('da-')
+                    ) || freshVoices[0];
                 }
+            }
+
+            // Set voice and language
+            if (voiceToUse) {
+                u.voice = voiceToUse;
+                u.lang = voiceToUse.lang;
+            } else {
+                // Fallback: just set language (browser will pick default)
+                u.lang = 'en-US';
             }
 
             if (isMCP) {
@@ -382,9 +418,12 @@
                 u.pitch = 0.75;
                 u.volume = 1.0;
                 const sub = document.getElementById('mcp-subtitles');
-                sub.innerText = text; sub.style.opacity = 1;
-                sub.style.textShadow = `2px 0 0 #ff0044, -2px 0 0 #00ffff`;
-                setTimeout(() => { sub.style.opacity = 0; }, 3500);
+                if (sub) {
+                    sub.innerText = text;
+                    sub.style.opacity = 1;
+                    sub.style.textShadow = `2px 0 0 #ff0044, -2px 0 0 #00ffff`;
+                    setTimeout(() => { sub.style.opacity = 0; }, 3500);
+                }
             } else {
                 // Regular voice: Natural, clear, and human-like
                 u.rate = 1.0;
@@ -392,7 +431,16 @@
                 u.volume = 0.7;
             }
 
-            window.speechSynthesis.speak(u);
+            // Error handling for mobile
+            u.onerror = (event) => {
+                console.warn('Speech synthesis error:', event.error);
+            };
+
+            try {
+                window.speechSynthesis.speak(u);
+            } catch (e) {
+                console.warn('Speech synthesis failed:', e);
+            }
         },
 
         playAcidBass: function(freq, dur, vol, accent = false) {
@@ -479,6 +527,9 @@
         },
 
         scheduleNote: function(time) {
+            // Only play music if enabled, sound effects always play
+            if (!this.musicEnabled) return;
+
             const step = noteIndex % 16;
             const isBuild = measure >= 4;
             const isFull = measure >= 8;
@@ -495,8 +546,13 @@
             if (step % 8 === 4 && isFull) this.playNoise('clap', 0.2, 0.3);
             if (step % 3 === 0 && Math.random() > 0.7) {
                 const note = LEAD_SCALE[Math.floor(Math.random() * LEAD_SCALE.length)];
-                this.playTone(note, 'triangle', 0.4, 0.1); 
+                this.playTone(note, 'triangle', 0.4, 0.1);
             }
+        },
+
+        toggleMusic: function() {
+            this.musicEnabled = !this.musicEnabled;
+            return this.musicEnabled;
         }
     };
 
@@ -1087,6 +1143,68 @@
         setTimeout(() => board.style.color = '#fff', 300);
     }
 
+    function checkGridBoundaries(delta) {
+        if (!playerRobot) return;
+
+        const pos = playerRobot.mesh.position;
+        const distFromCenter = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
+
+        // Check if outside warning zone
+        if (distFromCenter > CONFIG.gridWarningZone) {
+            boundaryWarningTimer += delta;
+
+            // Visual warning effect
+            if (!isOutsideGrid && distFromCenter > CONFIG.gridWarningZone) {
+                isOutsideGrid = true;
+                playerRobot.setExpression('HURT');
+            }
+
+            // Voice warning every 3 seconds
+            const currentTime = clock.elapsedTime;
+            if (currentTime - lastBoundaryWarning > 3.0) {
+                lastBoundaryWarning = currentTime;
+                const warnings = [
+                    "Return to the grid",
+                    "Warning: Grid boundary",
+                    "Turn back",
+                    "Stay in the play area",
+                    "You're leaving the grid"
+                ];
+                const warning = warnings[Math.floor(Math.random() * warnings.length)];
+                audioSystem.speak(warning, 1.0, false);
+                audioSystem.playTone(200, 'sawtooth', 0.3, 0.3);
+            }
+
+            // Hard boundary - prevent going too far
+            if (distFromCenter > CONFIG.gridBoundary) {
+                // Push player back gently towards center
+                const pushBackStrength = 0.3;
+                const dirToCenter = new THREE.Vector3(-pos.x, 0, -pos.z).normalize();
+                playerRobot.velocity.add(dirToCenter.multiplyScalar(pushBackStrength));
+
+                // Reduce velocity when hitting boundary
+                playerRobot.velocity.multiplyScalar(CONFIG.gridPushBackForce);
+
+                // Position constraint
+                const angle = Math.atan2(pos.z, pos.x);
+                pos.x = Math.cos(angle) * CONFIG.gridBoundary;
+                pos.z = Math.sin(angle) * CONFIG.gridBoundary;
+
+                // Flash effect
+                playerRobot.setExpression('HURT');
+                audioSystem.playTone(150, 'square', 0.1, 0.2);
+            }
+        } else {
+            // Back inside safe zone
+            if (isOutsideGrid) {
+                isOutsideGrid = false;
+                audioSystem.speak("Grid area", 1.2, false);
+                audioSystem.playTone(600, 'sine', 0.1, 0.1);
+            }
+            boundaryWarningTimer = 0;
+        }
+    }
+
     function animate() {
         requestAnimationFrame(animate);
         const delta = clock.getDelta();
@@ -1095,7 +1213,10 @@
 
         if (playerRobot) {
             playerRobot.update(delta, input, cameraAngle);
-            
+
+            // Check grid boundaries and guide player
+            checkGridBoundaries(delta);
+
             if (playerRobot.mesh.position.y < -30) {
                 resetPlayer();
             }
@@ -1152,13 +1273,51 @@
     document.getElementById('start-btn').addEventListener('click', () => {
         document.getElementById('overlay').style.opacity = 0;
         setTimeout(() => document.getElementById('overlay').style.display = 'none', 800);
+
+        // Critical: Warm up speech synthesis for mobile (requires user interaction)
+        if (window.speechSynthesis) {
+            // iOS/Safari requires an actual utterance with sound during user interaction
+            const warmup = new SpeechSynthesisUtterance('Starting');
+            warmup.volume = 0.3;
+            warmup.rate = 2.0; // Fast so it doesn't interfere
+
+            // Try to get voices synchronously
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length > 0) {
+                const englishVoice = voices.find(v => v.lang === 'en-US' || v.lang === 'en-GB');
+                if (englishVoice) warmup.voice = englishVoice;
+            }
+
+            window.speechSynthesis.speak(warmup);
+        }
+
         init();
         isPlaying = true;
         audioSystem.init();
+
+        // Test voice after initialization
+        setTimeout(() => {
+            if (audioSystem && audioSystem.speak) {
+                audioSystem.speak('System initialized', 1.0, false);
+            }
+        }, 1500);
     });
     
     document.getElementById('switch-char-btn').addEventListener('click', switchCharacter);
     document.getElementById('reset-pos-btn').addEventListener('click', resetPlayer);
+    document.getElementById('toggle-music-btn').addEventListener('click', () => {
+        const btn = document.getElementById('toggle-music-btn');
+        const isEnabled = audioSystem.toggleMusic();
+        btn.innerText = isEnabled ? 'Music: ON' : 'Music: OFF';
+        btn.style.color = isEnabled ? '#fff' : '#ff0044';
+        btn.style.borderColor = isEnabled ? 'rgba(0, 255, 255, 0.3)' : 'rgba(255, 0, 68, 0.5)';
+
+        // Play confirmation sound
+        audioSystem.playTone(isEnabled ? 600 : 300, 'sine', 0.1, 0.2);
+
+        // Voice feedback
+        audioSystem.speak(isEnabled ? 'Music on' : 'Music off', 1.0, false);
+    });
 
 </script>
 </body>
