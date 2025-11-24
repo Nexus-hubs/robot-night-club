@@ -317,24 +317,34 @@
             const setVoice = () => {
                 const voices = window.speechSynthesis.getVoices();
                 if (voices.length > 0) {
-                    // Filter for high-quality English voices
-                    const englishVoices = voices.filter(v =>
+                    // Filter for English voices (less restrictive for mobile)
+                    let englishVoices = voices.filter(v =>
                         v.lang.startsWith('en-') &&
-                        !v.lang.includes('IN') && // Exclude Indian English
-                        !v.lang.includes('da-') && // Exclude Danish
-                        (v.name.includes('Google') || v.name.includes('Microsoft') ||
-                         v.name.includes('Natural') || v.name.includes('Premium') ||
-                         v.name.includes('Enhanced') || !v.localService)
+                        !v.lang.includes('da-') // Exclude Danish
                     );
 
-                    // Prioritize specific high-quality voices
-                    this.selectedVoice = englishVoices.find(v =>
-                        v.name.includes('Google US English') ||
-                        v.name.includes('Google UK English') ||
-                        v.name.includes('Microsoft David') ||
-                        v.name.includes('Microsoft Zira') ||
-                        (v.lang === 'en-US' || v.lang === 'en-GB')
-                    ) || englishVoices[0] || voices.find(v => v.lang.startsWith('en-'));
+                    // If no English voices found, just use any available voice
+                    if (englishVoices.length === 0) {
+                        englishVoices = voices;
+                    }
+
+                    // Prioritize voices in order of preference
+                    this.selectedVoice =
+                        // First: Try high-quality cloud voices
+                        englishVoices.find(v =>
+                            v.name.includes('Google US English') ||
+                            v.name.includes('Google UK English') ||
+                            v.name.includes('Microsoft David') ||
+                            v.name.includes('Microsoft Zira') ||
+                            v.name.includes('Samantha') || // iOS default
+                            v.name.includes('Daniel') // iOS UK
+                        ) ||
+                        // Second: Try any US or UK English voice
+                        englishVoices.find(v => v.lang === 'en-US' || v.lang === 'en-GB') ||
+                        // Third: Try any English voice
+                        englishVoices.find(v => v.lang.startsWith('en-')) ||
+                        // Last resort: Use first available voice
+                        englishVoices[0] || voices[0];
 
                     this.voicesLoaded = true;
                     console.log('Voice selected:', this.selectedVoice?.name, this.selectedVoice?.lang);
@@ -344,36 +354,52 @@
             // Try to load voices immediately
             setVoice();
 
-            // Also listen for voices changed event (Chrome requires this)
+            // Also listen for voices changed event (Chrome/Safari requires this)
             if (window.speechSynthesis.onvoiceschanged !== undefined) {
                 window.speechSynthesis.onvoiceschanged = setVoice;
             }
+
+            // For mobile: Try again after a delay
+            setTimeout(setVoice, 100);
+            setTimeout(setVoice, 500);
         },
 
         speak: function(text, pitch = 1.0, isMCP = false) {
             if (!window.speechSynthesis) return;
+
+            // Cancel any ongoing speech
             window.speechSynthesis.cancel();
 
             const u = new SpeechSynthesisUtterance(text);
 
-            // Use pre-selected voice or fallback to finding one
-            if (this.selectedVoice) {
-                u.voice = this.selectedVoice;
-                u.lang = this.selectedVoice.lang;
-            } else {
-                // Fallback: try to find a voice now
-                const voices = window.speechSynthesis.getVoices();
-                const englishVoice = voices.find(v =>
-                    (v.lang === 'en-US' || v.lang === 'en-GB') &&
-                    !v.name.includes('da-')
-                ) || voices.find(v => v.lang.startsWith('en-'));
+            // Mobile fix: Always get fresh voice list
+            const voices = window.speechSynthesis.getVoices();
 
-                if (englishVoice) {
-                    u.voice = englishVoice;
-                    u.lang = englishVoice.lang;
-                } else {
-                    u.lang = 'en-US';
+            // Try to use pre-selected voice
+            let voiceToUse = this.selectedVoice;
+
+            // If no voice selected or voices not loaded, try to find one now
+            if (!voiceToUse || voices.length === 0) {
+                // Get voices again (mobile browsers sometimes need this)
+                const freshVoices = window.speechSynthesis.getVoices();
+
+                if (freshVoices.length > 0) {
+                    // Find the best English voice
+                    voiceToUse = freshVoices.find(v =>
+                        v.lang === 'en-US' || v.lang === 'en-GB'
+                    ) || freshVoices.find(v =>
+                        v.lang.startsWith('en-') && !v.lang.includes('da-')
+                    ) || freshVoices[0];
                 }
+            }
+
+            // Set voice and language
+            if (voiceToUse) {
+                u.voice = voiceToUse;
+                u.lang = voiceToUse.lang;
+            } else {
+                // Fallback: just set language (browser will pick default)
+                u.lang = 'en-US';
             }
 
             if (isMCP) {
@@ -382,9 +408,12 @@
                 u.pitch = 0.75;
                 u.volume = 1.0;
                 const sub = document.getElementById('mcp-subtitles');
-                sub.innerText = text; sub.style.opacity = 1;
-                sub.style.textShadow = `2px 0 0 #ff0044, -2px 0 0 #00ffff`;
-                setTimeout(() => { sub.style.opacity = 0; }, 3500);
+                if (sub) {
+                    sub.innerText = text;
+                    sub.style.opacity = 1;
+                    sub.style.textShadow = `2px 0 0 #ff0044, -2px 0 0 #00ffff`;
+                    setTimeout(() => { sub.style.opacity = 0; }, 3500);
+                }
             } else {
                 // Regular voice: Natural, clear, and human-like
                 u.rate = 1.0;
@@ -392,7 +421,16 @@
                 u.volume = 0.7;
             }
 
-            window.speechSynthesis.speak(u);
+            // Error handling for mobile
+            u.onerror = (event) => {
+                console.warn('Speech synthesis error:', event.error);
+            };
+
+            try {
+                window.speechSynthesis.speak(u);
+            } catch (e) {
+                console.warn('Speech synthesis failed:', e);
+            }
         },
 
         playAcidBass: function(freq, dur, vol, accent = false) {
@@ -1152,6 +1190,22 @@
     document.getElementById('start-btn').addEventListener('click', () => {
         document.getElementById('overlay').style.opacity = 0;
         setTimeout(() => document.getElementById('overlay').style.display = 'none', 800);
+
+        // Warm up speech synthesis for mobile (requires user interaction)
+        if (window.speechSynthesis) {
+            // Create a silent utterance to initialize speech on mobile
+            const warmup = new SpeechSynthesisUtterance('');
+            warmup.volume = 0;
+            window.speechSynthesis.speak(warmup);
+
+            // Load voices again to ensure they're available
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length === 0) {
+                // Force voice loading on mobile
+                window.speechSynthesis.getVoices();
+            }
+        }
+
         init();
         isPlaying = true;
         audioSystem.init();
